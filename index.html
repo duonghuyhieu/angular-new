@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Angular Core Deep Dive — Tóm tắt tiếng Việt</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">Tóm tắt khoá học</div>
+    <div class="brand-sub">Angular Core Deep Dive</div>
+
+    <input class="search" id="search" type="search" placeholder="Tìm bài học (vd: signal, defer, ngFor)…" />
+
+    <div class="progress-bar"><div id="progBar"></div></div>
+    <div class="progress-text" id="progText">0 / 0 bài đã đọc</div>
+
+    <nav id="nav"></nav>
+
+    <div class="toc-tip">
+      <kbd class="kbd">/</kbd> để tìm — <kbd class="kbd">M</kbd> đánh dấu đã đọc
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <section class="intro">
+      <h1 id="courseTitle"></h1>
+      <p class="lede" id="courseSub"></p>
+      <p>Trang này tóm tắt khoá <em>Angular Core Deep Dive</em> theo từng chương → từng bài.
+        Đọc tuần tự cho lộ trình bài bản, hoặc nhảy chương qua sidebar trái khi cần ôn nhanh.
+        Mỗi bài có ví dụ code thực tế — copy về thử ngay trong project Angular của bạn.</p>
+      <p>Tiến độ đọc được lưu trong trình duyệt (localStorage). Nhấn nút <em>Đánh dấu đã đọc</em> ở mỗi bài, hoặc dùng phím <span class="kbd">M</span>.</p>
+    </section>
+
+    <div id="content"></div>
+  </main>
+</div>
+
+<script src="data.js"></script>
+<script>
+(function() {
+  const KEY = "angular-course-read";
+  const read = new Set(JSON.parse(localStorage.getItem(KEY) || "[]"));
+
+  // counts
+  let totalLessons = 0;
+  COURSE.sections.forEach(s => totalLessons += s.lessons.length);
+
+  // ---------- HEADER ----------
+  document.getElementById("courseTitle").textContent = COURSE.title;
+  document.getElementById("courseSub").textContent = COURSE.subtitle;
+
+  // ---------- NAV ----------
+  const nav = document.getElementById("nav");
+  COURSE.sections.forEach((sec) => {
+    const wrap = document.createElement("div");
+    wrap.className = "nav-section";
+    const det = document.createElement("details");
+    if (sec.n === "01") det.open = true;
+    const sum = document.createElement("summary");
+    sum.innerHTML = `<span class="num">${sec.n}</span><span>${sec.title}</span>`;
+    det.appendChild(sum);
+
+    const ul = document.createElement("ul");
+    sec.lessons.forEach((l) => {
+      const li = document.createElement("li");
+      li.dataset.id = l.id;
+      li.textContent = `${l.n}. ${l.title}`;
+      if (read.has(l.id)) li.classList.add("read");
+      li.addEventListener("click", () => {
+        document.getElementById(l.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      ul.appendChild(li);
+    });
+    det.appendChild(ul);
+    wrap.appendChild(det);
+    nav.appendChild(wrap);
+  });
+
+  // ---------- CONTENT ----------
+  const content = document.getElementById("content");
+  COURSE.sections.forEach((sec, sIdx) => {
+    const secEl = document.createElement("section");
+    secEl.dataset.section = sec.id;
+    const title = document.createElement("div");
+    title.className = "section-title";
+    title.textContent = `Chương ${sec.n} — ${sec.title}`;
+    secEl.appendChild(title);
+
+    sec.lessons.forEach((lesson, lIdx) => {
+      const article = document.createElement("article");
+      article.className = "lesson";
+      article.id = lesson.id;
+      if (read.has(lesson.id)) article.classList.add("is-read");
+
+      // header
+      const h = document.createElement("h2");
+      h.textContent = `${sec.n}.${lesson.n} — ${lesson.title}`;
+      article.appendChild(h);
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.innerHTML = `
+        <span class="badge">Chương ${sec.n}</span>
+        <span>Bài ${lesson.n}</span>
+      `;
+      const btn = document.createElement("button");
+      btn.className = "mark-read";
+      btn.textContent = read.has(lesson.id) ? "✓ Đã đọc" : "Đánh dấu đã đọc";
+      btn.addEventListener("click", () => toggleRead(lesson.id, article, btn));
+      meta.appendChild(btn);
+      article.appendChild(meta);
+
+      // body
+      const body = document.createElement("div");
+      body.innerHTML = lesson.html;
+      article.appendChild(body);
+
+      // prev/next nav
+      const navEl = buildPrevNext(sIdx, lIdx);
+      if (navEl) article.appendChild(navEl);
+
+      secEl.appendChild(article);
+    });
+    content.appendChild(secEl);
+  });
+
+  function buildPrevNext(sIdx, lIdx) {
+    const flat = [];
+    COURSE.sections.forEach(s => s.lessons.forEach(l => flat.push(l)));
+    const idx = flat.findIndex(x => x === COURSE.sections[sIdx].lessons[lIdx]);
+    const prev = flat[idx - 1];
+    const next = flat[idx + 1];
+    if (!prev && !next) return null;
+    const el = document.createElement("nav");
+    el.className = "lesson-nav";
+    el.innerHTML = `
+      ${prev ? `<a href="#${prev.id}">← ${prev.n}. ${prev.title}</a>` : "<span></span>"}
+      ${next ? `<a href="#${next.id}">${next.n}. ${next.title} →</a>` : "<span></span>"}
+    `;
+    return el;
+  }
+
+  // ---------- READ TRACKING ----------
+  function toggleRead(id, articleEl, btn) {
+    if (read.has(id)) {
+      read.delete(id);
+      articleEl.classList.remove("is-read");
+      btn.textContent = "Đánh dấu đã đọc";
+    } else {
+      read.add(id);
+      articleEl.classList.add("is-read");
+      btn.textContent = "✓ Đã đọc";
+    }
+    localStorage.setItem(KEY, JSON.stringify([...read]));
+    updateNavRead(id);
+    updateProgress();
+  }
+  function updateNavRead(id) {
+    const li = document.querySelector(`.nav-section li[data-id="${id}"]`);
+    if (!li) return;
+    li.classList.toggle("read", read.has(id));
+  }
+  function updateProgress() {
+    const pct = totalLessons ? Math.round((read.size / totalLessons) * 100) : 0;
+    document.getElementById("progBar").style.width = pct + "%";
+    document.getElementById("progText").textContent =
+      `${read.size} / ${totalLessons} bài đã đọc · ${pct}%`;
+  }
+  updateProgress();
+
+  // ---------- SCROLL HIGHLIGHT ----------
+  const lessonEls = [...document.querySelectorAll(".lesson")];
+  const navLis = [...document.querySelectorAll(".nav-section li")];
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        const id = e.target.id;
+        navLis.forEach(li => li.classList.toggle("active", li.dataset.id === id));
+        // open the section containing it
+        const li = document.querySelector(`.nav-section li[data-id="${id}"]`);
+        if (li) {
+          const det = li.closest("details");
+          if (det && !det.open) det.open = true;
+          li.scrollIntoView({ block: "nearest" });
+        }
+      }
+    });
+  }, { rootMargin: "-30% 0px -65% 0px" });
+  lessonEls.forEach(el => obs.observe(el));
+
+  // ---------- SEARCH ----------
+  const search = document.getElementById("search");
+  search.addEventListener("input", () => {
+    const q = search.value.trim().toLowerCase();
+    document.querySelectorAll(".nav-section").forEach(sec => {
+      const det = sec.querySelector("details");
+      const items = sec.querySelectorAll("li");
+      let any = false;
+      items.forEach(li => {
+        const match = !q || li.textContent.toLowerCase().includes(q);
+        li.style.display = match ? "" : "none";
+        if (match) any = true;
+      });
+      sec.style.display = any ? "" : "none";
+      if (q) det.open = any;
+    });
+  });
+
+  // ---------- KEYBOARD ----------
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "/" && document.activeElement !== search) {
+      e.preventDefault();
+      search.focus();
+      search.select();
+    }
+    if (e.key.toLowerCase() === "m" && document.activeElement !== search) {
+      // mark currently visible lesson read
+      const active = navLis.find(li => li.classList.contains("active"));
+      if (active) {
+        const id = active.dataset.id;
+        const art = document.getElementById(id);
+        const btn = art.querySelector(".mark-read");
+        toggleRead(id, art, btn);
+      }
+    }
+  });
+
+  // hash scroll on load
+  if (location.hash) {
+    setTimeout(() => document.querySelector(location.hash)?.scrollIntoView(), 50);
+  }
+})();
+</script>
+</body>
+</html>
