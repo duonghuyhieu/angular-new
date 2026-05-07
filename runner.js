@@ -226,16 +226,18 @@
     return m;
   })();
 
-  function ensureAngularImports(code) {
-    // Nếu file đã có import từ một module, lấy danh sách symbol đã import
-    const importedNames = new Set();
-    const importRe = /import\s+\{([^}]+)\}\s+from\s+['"][^'"]+['"]/g;
+  function getImportedNames(code) {
+    const names = new Set();
+    const re = /import\s+\{([^}]+)\}\s+from\s+['"][^'"]+['"]/g;
     let m;
-    while ((m = importRe.exec(code))) {
-      m[1].split(',').forEach((n) => importedNames.add(n.replace(/\s/g, '').replace(/\/\/.*$/, '')));
+    while ((m = re.exec(code))) {
+      m[1].split(',').forEach((n) => names.add(n.replace(/\s/g, '').replace(/\/\/.*$/, '').split(' as ')[0]));
     }
+    return names;
+  }
 
-    // Symbol Angular được tham chiếu trong code (theo word boundary) nhưng chưa import
+  function ensureAngularImports(code) {
+    const importedNames = getImportedNames(code);
     const toAdd = {}; // module → [names]
     for (const [sym, mod] of Object.entries(ANGULAR_SYMBOL_MODULE)) {
       if (importedNames.has(sym)) continue;
@@ -244,12 +246,35 @@
         toAdd[mod].push(sym);
       }
     }
-
     if (Object.keys(toAdd).length === 0) return code;
-
     const lines = [];
     for (const [mod, names] of Object.entries(toAdd)) {
       lines.push(`import { ${names.join(', ')} } from '${mod}';`);
+    }
+    return lines.join('\n') + '\n' + code;
+  }
+
+  /**
+   * Auto-import các class định nghĩa ở file khác trong cùng project.
+   * Vd: app.component.ts có `imports: [CourseCardComponent]` nhưng thiếu
+   * `import { CourseCardComponent } from './course-card.component';`
+   * → hàm này tự thêm vào.
+   */
+  function ensureLocalImports(code, classToFile, currentFilename) {
+    const importedNames = getImportedNames(code);
+    const toAdd = {}; // path → [classNames]
+    for (const [className, filename] of Object.entries(classToFile)) {
+      if (filename === currentFilename) continue;
+      if (importedNames.has(className)) continue;
+      if (!new RegExp(`\\b${className}\\b`).test(code)) continue;
+      const path = './' + filename.replace(/\.ts$/, '');
+      if (!toAdd[path]) toAdd[path] = [];
+      toAdd[path].push(className);
+    }
+    if (Object.keys(toAdd).length === 0) return code;
+    const lines = [];
+    for (const [path, names] of Object.entries(toAdd)) {
+      lines.push(`import { ${names.join(', ')} } from '${path}';`);
     }
     return lines.join('\n') + '\n' + code;
   }
@@ -595,10 +620,17 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
       'src/main.ts': mainTsContent,
     };
 
-    // Ghi mỗi TS file (auto-import Angular built-ins nếu thiếu)
+    // Map className → filename để auto-import class local giữa các file
+    const classToFile = {};
+    for (const f of tsFiles) {
+      for (const cls of f.exportedClasses) classToFile[cls] = f.filename;
+    }
+
+    // Ghi mỗi TS file: auto-import Angular built-ins + class local còn thiếu
     tsFiles.forEach((f, i) => {
-      const filled = ensureAngularImports(f.text);
-      const content = i === 0 ? banner + filled : filled;
+      let processed = ensureAngularImports(f.text);
+      processed = ensureLocalImports(processed, classToFile, f.filename);
+      const content = i === 0 ? banner + processed : processed;
       files['src/app/' + f.filename] = content;
     });
 
