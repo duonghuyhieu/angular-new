@@ -1,10 +1,14 @@
 /**
  * runner.js — gắn nút "Chạy thử trên StackBlitz" vào những block code
- * có dạng Angular component standalone với inline template.
+ * có dạng Angular component standalone (template inline hoặc templateUrl).
  *
- * Khi user click → gom TOÀN BỘ block code liên quan trong cùng bài học
- * (từ đầu bài đến block được click) → tách thành nhiều file (.ts/.html/.scss)
- * → mở StackBlitz tab mới với project Angular 17 đầy đủ ngữ cảnh.
+ * Khi user click → gom toàn bộ block code trong cùng bài học (TS/HTML/CSS),
+ * tách thành nhiều file đúng chuẩn Angular, auto-import các symbol Angular
+ * built-in còn thiếu (Component, CommonModule, Signal, RouterLink…),
+ * mở StackBlitz tab mới với project Angular 17 đầy đủ ngữ cảnh.
+ *
+ * Resolution check: nếu block tham chiếu component/symbol KHÔNG nằm trong bài
+ * (cross-lesson dep, Material UI…) → ẩn nút Run, tránh UX click rồi báo lỗi.
  */
 
 (function () {
@@ -32,10 +36,12 @@
       const sel = meta.match(/selector\s*:\s*['"]([^'"]+)['"]/);
       const tplUrl = meta.match(/templateUrl\s*:\s*['"]\.?\/?([\w./-]+)['"]/);
       const stUrl = meta.match(/styleUrls?\s*:\s*\[?\s*['"]\.?\/?([\w./-]+)['"]/);
+      const tplInline = meta.match(/template\s*:\s*`([\s\S]*?)`/);
       out.push({
         className,
         selector: sel ? sel[1] : null,
-        hasInlineTemplate: /template\s*:\s*`/.test(meta),
+        hasInlineTemplate: !!tplInline,
+        templateInline: tplInline ? tplInline[1] : null,
         templateUrl: tplUrl ? tplUrl[1] : null,
         styleUrl: stUrl ? stUrl[1] : null,
       });
@@ -123,15 +129,162 @@
     const clickedIdx = allPres.indexOf(clickedPre);
     if (clickedIdx < 0) return null;
 
-    // Lấy block 0..clickedIdx
-    const blocks = [];
-    for (let i = 0; i <= clickedIdx; i++) {
-      const codeEl = allPres[i].querySelector('code');
+    // Lấy TOÀN BỘ block trong bài — để có thể ghép HTML/CSS xuất hiện sau block click
+    const blocks = allPres.map((pre, i) => {
+      const codeEl = pre.querySelector('code');
       const text = codeEl ? codeEl.textContent || '' : '';
-      blocks.push({ idx: i, kind: classifyBlock(text), text });
-    }
+      return { idx: i, kind: classifyBlock(text), text };
+    });
 
     return { lesson, blocks, clickedIdx };
+  }
+
+  // ==================== Whitelist Angular built-ins ====================
+
+  const ANGULAR_TAG_WHITELIST = new Set([
+    'ng-content', 'ng-container', 'ng-template', 'router-outlet',
+  ]);
+
+  // Symbol → module path để auto-import (chỉ gồm Angular core/common/forms/router + rxjs)
+  const ANGULAR_SYMBOL_MODULE = (() => {
+    const m = {};
+    const add = (mod, syms) => syms.forEach((s) => (m[s] = mod));
+
+    add('@angular/core', [
+      'Component', 'Directive', 'Pipe', 'Injectable', 'NgModule',
+      'Input', 'Output', 'ViewChild', 'ViewChildren', 'ContentChild', 'ContentChildren',
+      'HostBinding', 'HostListener', 'EventEmitter',
+      'inject', 'signal', 'computed', 'effect', 'untracked',
+      'ChangeDetectionStrategy', 'ChangeDetectorRef',
+      'ElementRef', 'TemplateRef', 'ViewContainerRef', 'Renderer2', 'NgZone',
+      'OnInit', 'OnChanges', 'OnDestroy', 'DoCheck',
+      'AfterViewInit', 'AfterViewChecked', 'AfterContentInit', 'AfterContentChecked',
+      'SimpleChanges', 'SimpleChange',
+      'forwardRef', 'InjectionToken', 'Inject', 'Optional', 'Self', 'SkipSelf', 'Host',
+      'PipeTransform', 'QueryList', 'EmbeddedViewRef', 'ApplicationRef',
+      'enableProdMode', 'isDevMode', 'inputBinding', 'outputBinding',
+      'WritableSignal', 'Signal', 'InputSignal',
+    ]);
+    add('@angular/common', [
+      'CommonModule',
+      'NgIf', 'NgFor', 'NgForOf', 'NgSwitch', 'NgSwitchCase', 'NgSwitchDefault',
+      'NgClass', 'NgStyle', 'NgComponentOutlet', 'NgTemplateOutlet',
+      'NgPlural', 'NgPluralCase',
+      'AsyncPipe', 'DatePipe', 'CurrencyPipe', 'JsonPipe', 'PercentPipe', 'DecimalPipe',
+      'SlicePipe', 'TitleCasePipe', 'UpperCasePipe', 'LowerCasePipe', 'KeyValuePipe',
+      'I18nPluralPipe', 'I18nSelectPipe', 'Location',
+    ]);
+    add('@angular/common/http', [
+      'HttpClient', 'HttpClientModule', 'HttpHeaders', 'HttpParams',
+      'HttpErrorResponse', 'HttpResponse', 'HttpRequest', 'HttpEvent', 'HttpInterceptor',
+      'provideHttpClient', 'withInterceptors',
+    ]);
+    add('@angular/forms', [
+      'FormsModule', 'ReactiveFormsModule',
+      'FormControl', 'FormGroup', 'FormBuilder', 'FormArray', 'FormRecord', 'Validators',
+      'NgForm', 'NgModel', 'AbstractControl', 'ValidatorFn', 'AsyncValidatorFn',
+    ]);
+    add('@angular/router', [
+      'RouterModule', 'RouterOutlet', 'RouterLink', 'RouterLinkActive', 'RouterLinkWithHref',
+      'Router', 'ActivatedRoute', 'ActivatedRouteSnapshot', 'RouterStateSnapshot',
+      'NavigationEnd', 'NavigationStart', 'Routes', 'Route',
+      'CanActivate', 'CanActivateFn', 'CanDeactivate', 'Resolve', 'ResolveFn',
+      'provideRouter', 'withComponentInputBinding',
+    ]);
+    add('@angular/platform-browser', [
+      'bootstrapApplication', 'BrowserModule',
+    ]);
+    add('rxjs', [
+      'Observable', 'Subject', 'BehaviorSubject', 'ReplaySubject', 'AsyncSubject',
+      'Subscription', 'of', 'from', 'EMPTY', 'NEVER',
+      'combineLatest', 'merge', 'concat', 'forkJoin', 'interval', 'timer', 'fromEvent',
+      'map', 'filter', 'tap', 'catchError', 'finalize',
+      'mergeMap', 'switchMap', 'concatMap', 'exhaustMap',
+      'debounceTime', 'throttleTime', 'distinctUntilChanged',
+      'take', 'takeUntil', 'takeWhile', 'first', 'last', 'skip',
+      'startWith', 'shareReplay', 'share', 'scan', 'reduce', 'pluck', 'pairwise',
+      'withLatestFrom', 'delay', 'retry', 'retryWhen',
+    ]);
+    return m;
+  })();
+
+  function ensureAngularImports(code) {
+    // Nếu file đã có import từ một module, lấy danh sách symbol đã import
+    const importedNames = new Set();
+    const importRe = /import\s+\{([^}]+)\}\s+from\s+['"][^'"]+['"]/g;
+    let m;
+    while ((m = importRe.exec(code))) {
+      m[1].split(',').forEach((n) => importedNames.add(n.replace(/\s/g, '').replace(/\/\/.*$/, '')));
+    }
+
+    // Symbol Angular được tham chiếu trong code (theo word boundary) nhưng chưa import
+    const toAdd = {}; // module → [names]
+    for (const [sym, mod] of Object.entries(ANGULAR_SYMBOL_MODULE)) {
+      if (importedNames.has(sym)) continue;
+      if (new RegExp(`\\b${sym}\\b`).test(code)) {
+        if (!toAdd[mod]) toAdd[mod] = [];
+        toAdd[mod].push(sym);
+      }
+    }
+
+    if (Object.keys(toAdd).length === 0) return code;
+
+    const lines = [];
+    for (const [mod, names] of Object.entries(toAdd)) {
+      lines.push(`import { ${names.join(', ')} } from '${mod}';`);
+    }
+    return lines.join('\n') + '\n' + code;
+  }
+
+  // ==================== Resolution check ====================
+
+  function checkResolution(blocks) {
+    const tsItems = blocks
+      .filter((b) => b.kind === 'ts')
+      .map((b) => ({ ...b, components: parseComponents(b.text), exportedClasses: parseExportedClasses(b.text) }));
+
+    const definedSelectors = new Set(tsItems.flatMap((it) => it.components.map((c) => c.selector).filter(Boolean)));
+    const definedNames = new Set();
+    tsItems.forEach((it) => it.exportedClasses.forEach((c) => definedNames.add(c)));
+    // Symbol đã import từ @angular/* được coi là defined
+    for (const it of tsItems) {
+      const re = /import\s+\{([^}]+)\}\s+from\s+['"]@angular[^'"]*['"]/g;
+      let m;
+      while ((m = re.exec(it.text))) {
+        m[1].split(',').forEach((n) => definedNames.add(n.replace(/\s/g, '').replace(/\/\/.*$/, '')));
+      }
+    }
+    // Symbol Angular built-in (cho dù chưa import — runner.js sẽ tự thêm)
+    Object.keys(ANGULAR_SYMBOL_MODULE).forEach((s) => definedNames.add(s));
+
+    const issues = [];
+
+    // Check selectors trong inline templates
+    for (const it of tsItems) {
+      for (const c of it.components) {
+        if (!c.templateInline) continue;
+        const refs = [...c.templateInline.matchAll(/<\s*((?:app-|[a-z][\w-]*-)[\w-]+)/g)].map((m) => m[1]);
+        for (const r of refs) {
+          if (ANGULAR_TAG_WHITELIST.has(r)) continue;
+          if (!definedSelectors.has(r)) issues.push(`SEL:${r}`);
+        }
+      }
+    }
+
+    // Check imports: [...] array (strip line/block comment trước khi split)
+    for (const it of tsItems) {
+      const m = it.text.match(/imports\s*:\s*\[([^\]]*)\]/);
+      if (!m) continue;
+      const cleaned = m[1]
+        .replace(/\/\/[^\n]*/g, '')      // line comments
+        .replace(/\/\*[\s\S]*?\*\//g, ''); // block comments
+      const names = cleaned.split(',').map((s) => s.replace(/\s/g, '')).filter(Boolean);
+      for (const name of names) {
+        if (!definedNames.has(name)) issues.push(`IMP:${name}`);
+      }
+    }
+
+    return issues;
   }
 
   // ==================== Dựng project files ====================
@@ -331,9 +484,10 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
       'src/main.ts': mainTsContent,
     };
 
-    // Ghi mỗi TS file
+    // Ghi mỗi TS file (auto-import Angular built-ins nếu thiếu)
     tsFiles.forEach((f, i) => {
-      const content = i === 0 ? banner + f.text : f.text;
+      const filled = ensureAngularImports(f.text);
+      const content = i === 0 ? banner + filled : filled;
       files['src/app/' + f.filename] = content;
     });
 
@@ -348,7 +502,12 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
             const block = findMatchingBlock(blocks, f.idx, 'html', cleanRelPath(c.templateUrl));
             files[path] = block
               ? block.text
-              : `<!-- Template ${cleanRelPath(c.templateUrl)} không có trong bài học. -->\n`;
+              : `<!-- Template ${cleanRelPath(c.templateUrl)} không có sẵn trong bài học -->
+<div style="padding:14px;border:2px dashed #c2410c;border-radius:8px;background:#fff1ea;color:#c2410c;font-family:system-ui,-apple-system,sans-serif">
+  <strong>⚠ Template chưa cung cấp</strong>
+  <p style="margin:6px 0 0;font-size:13px;line-height:1.5">Bài học này không bao gồm block HTML cho <code>${cleanRelPath(c.templateUrl)}</code>. Bạn có thể thêm template vào đây để xem demo, hoặc chuyển sang <code>template:</code> inline trong file <code>.ts</code>.</p>
+</div>
+`;
           }
         }
         if (c.styleUrl) {
@@ -460,6 +619,17 @@ export class AppComponent {}
       if (!codeEl) return;
       const text = codeEl.textContent || '';
       if (!isRunnableBlock(text)) return;
+
+      // Resolution check: gom toàn bộ ngữ cảnh bài học và xem có symbol nào unresolvable
+      const ctx = gatherLessonContext(pre);
+      if (ctx) {
+        const unresolved = checkResolution(ctx.blocks);
+        if (unresolved.length > 0) {
+          // Block tham chiếu component/symbol không nằm trong bài → không show nút
+          // (vd: cross-lesson deps, Material UI…)
+          return;
+        }
+      }
 
       // Wrap pre vào .code-wrap
       let wrap = pre.parentElement;
