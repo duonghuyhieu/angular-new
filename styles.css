@@ -191,20 +191,60 @@ a:hover { text-decoration: underline; }
 }
 .intro p { font-size: 15.5px; }
 
-.section-title {
+/* Per-page mode: chỉ hiển thị 1 bài hoặc intro tại một thời điểm */
+.intro,
+.lesson {
+  display: none;
+}
+.intro.is-active,
+.lesson.is-active {
+  display: block;
+}
+
+/* Breadcrumb chương — luôn hiển thị trên đầu mỗi bài */
+.lesson-section {
   font-size: 11.5px;
   letter-spacing: .15em;
   text-transform: uppercase;
   color: var(--accent);
   font-weight: 700;
-  margin: 56px 0 6px;
+  margin: 0 0 10px;
 }
 
 .lesson {
-  border-top: 1px solid var(--rule);
-  padding: 40px 0 30px;
+  padding: 8px 0 30px;
 }
-.lesson:first-of-type { border-top: none; padding-top: 16px; }
+
+/* CTA "Bắt đầu" trên trang chủ */
+.intro .cta {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 10px 18px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  transition: transform .15s, box-shadow .15s;
+  box-shadow: var(--shadow);
+}
+.intro .cta:hover {
+  text-decoration: none;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0,0,0,.05), 0 12px 28px rgba(194,65,12,.15);
+}
+
+a.brand-sub {
+  color: var(--ink);
+  text-decoration: none;
+  cursor: pointer;
+  display: block;
+}
+a.brand-sub:hover {
+  color: var(--accent);
+  text-decoration: none;
+}
 
 .lesson h2 {
   font-size: 26px;

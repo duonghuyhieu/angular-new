@@ -10,7 +10,7 @@
 <div class="layout">
   <aside class="sidebar">
     <div class="brand">Tóm tắt khoá học</div>
-    <div class="brand-sub">Angular Core Deep Dive</div>
+    <a class="brand-sub" href="#" id="brandHome">Angular Core Deep Dive</a>
 
     <input class="search" id="search" type="search" placeholder="Tìm bài học (vd: signal, defer, ngFor)…" />
 
@@ -25,13 +25,14 @@
   </aside>
 
   <main class="main" id="main">
-    <section class="intro">
+    <section class="intro" id="intro">
       <h1 id="courseTitle"></h1>
       <p class="lede" id="courseSub"></p>
       <p>Trang này tóm tắt khoá <em>Angular Core Deep Dive</em> theo từng chương → từng bài.
-        Đọc tuần tự cho lộ trình bài bản, hoặc nhảy chương qua sidebar trái khi cần ôn nhanh.
-        Mỗi bài có ví dụ code thực tế — copy về thử ngay trong project Angular của bạn.</p>
+        Mỗi bài hiển thị trên một trang riêng — chọn từ sidebar trái, hoặc bấm <em>Bắt đầu</em> để vào bài đầu tiên.
+        Mỗi ví dụ component có nút <em>▶ Chạy thử</em> mở StackBlitz với đầy đủ ngữ cảnh trong bài.</p>
       <p>Tiến độ đọc được lưu trong trình duyệt (localStorage). Nhấn nút <em>Đánh dấu đã đọc</em> ở mỗi bài, hoặc dùng phím <span class="kbd">M</span>.</p>
+      <p><a class="cta" id="ctaStart" href="#">Bắt đầu bài đầu tiên →</a></p>
     </section>
 
     <div id="content"></div>
@@ -45,13 +46,20 @@
   const KEY = "angular-course-read";
   const read = new Set(JSON.parse(localStorage.getItem(KEY) || "[]"));
 
-  // counts
-  let totalLessons = 0;
-  COURSE.sections.forEach(s => totalLessons += s.lessons.length);
+  // Flatten danh sách bài để duyệt prev/next + tìm bài đầu tiên
+  const flatLessons = [];
+  COURSE.sections.forEach((sec) => {
+    sec.lessons.forEach((l) => flatLessons.push({ ...l, section: sec }));
+  });
+  const totalLessons = flatLessons.length;
 
   // ---------- HEADER ----------
   document.getElementById("courseTitle").textContent = COURSE.title;
   document.getElementById("courseSub").textContent = COURSE.subtitle;
+
+  const firstLessonId = flatLessons[0]?.id;
+  const ctaStart = document.getElementById("ctaStart");
+  if (firstLessonId) ctaStart.href = "#" + firstLessonId;
 
   // ---------- NAV ----------
   const nav = document.getElementById("nav");
@@ -71,7 +79,7 @@
       li.textContent = `${l.n}. ${l.title}`;
       if (read.has(l.id)) li.classList.add("read");
       li.addEventListener("click", () => {
-        document.getElementById(l.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        location.hash = "#" + l.id;
       });
       ul.appendChild(li);
     });
@@ -80,69 +88,61 @@
     nav.appendChild(wrap);
   });
 
-  // ---------- CONTENT ----------
+  // ---------- CONTENT (flat per-lesson, hidden by default) ----------
   const content = document.getElementById("content");
-  COURSE.sections.forEach((sec, sIdx) => {
-    const secEl = document.createElement("section");
-    secEl.dataset.section = sec.id;
-    const title = document.createElement("div");
-    title.className = "section-title";
-    title.textContent = `Chương ${sec.n} — ${sec.title}`;
-    secEl.appendChild(title);
+  flatLessons.forEach((lesson, idx) => {
+    const sec = lesson.section;
 
-    sec.lessons.forEach((lesson, lIdx) => {
-      const article = document.createElement("article");
-      article.className = "lesson";
-      article.id = lesson.id;
-      if (read.has(lesson.id)) article.classList.add("is-read");
+    const article = document.createElement("article");
+    article.className = "lesson";
+    article.id = lesson.id;
+    article.dataset.section = sec.id;
+    if (read.has(lesson.id)) article.classList.add("is-read");
 
-      // header
-      const h = document.createElement("h2");
-      h.textContent = `${sec.n}.${lesson.n} — ${lesson.title}`;
-      article.appendChild(h);
+    // Breadcrumb chương — luôn hiển thị trên đầu mỗi bài
+    const crumb = document.createElement("div");
+    crumb.className = "lesson-section";
+    crumb.textContent = `Chương ${sec.n} — ${sec.title}`;
+    article.appendChild(crumb);
 
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.innerHTML = `
-        <span class="badge">Chương ${sec.n}</span>
-        <span>Bài ${lesson.n}</span>
-      `;
-      const btn = document.createElement("button");
-      btn.className = "mark-read";
-      btn.textContent = read.has(lesson.id) ? "✓ Đã đọc" : "Đánh dấu đã đọc";
-      btn.addEventListener("click", () => toggleRead(lesson.id, article, btn));
-      meta.appendChild(btn);
-      article.appendChild(meta);
+    // Title
+    const h = document.createElement("h2");
+    h.textContent = `${sec.n}.${lesson.n} — ${lesson.title}`;
+    article.appendChild(h);
 
-      // body
-      const body = document.createElement("div");
-      body.innerHTML = lesson.html;
-      article.appendChild(body);
-
-      // prev/next nav
-      const navEl = buildPrevNext(sIdx, lIdx);
-      if (navEl) article.appendChild(navEl);
-
-      secEl.appendChild(article);
-    });
-    content.appendChild(secEl);
-  });
-
-  function buildPrevNext(sIdx, lIdx) {
-    const flat = [];
-    COURSE.sections.forEach(s => s.lessons.forEach(l => flat.push(l)));
-    const idx = flat.findIndex(x => x === COURSE.sections[sIdx].lessons[lIdx]);
-    const prev = flat[idx - 1];
-    const next = flat[idx + 1];
-    if (!prev && !next) return null;
-    const el = document.createElement("nav");
-    el.className = "lesson-nav";
-    el.innerHTML = `
-      ${prev ? `<a href="#${prev.id}">← ${prev.n}. ${prev.title}</a>` : "<span></span>"}
-      ${next ? `<a href="#${next.id}">${next.n}. ${next.title} →</a>` : "<span></span>"}
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.innerHTML = `
+      <span class="badge">Chương ${sec.n}</span>
+      <span>Bài ${lesson.n}</span>
     `;
-    return el;
-  }
+    const markBtn = document.createElement("button");
+    markBtn.className = "mark-read";
+    markBtn.textContent = read.has(lesson.id) ? "✓ Đã đọc" : "Đánh dấu đã đọc";
+    markBtn.addEventListener("click", () => toggleRead(lesson.id, article, markBtn));
+    meta.appendChild(markBtn);
+    article.appendChild(meta);
+
+    // Body
+    const body = document.createElement("div");
+    body.innerHTML = lesson.html;
+    article.appendChild(body);
+
+    // Prev / Next
+    const prev = flatLessons[idx - 1];
+    const next = flatLessons[idx + 1];
+    if (prev || next) {
+      const navEl = document.createElement("nav");
+      navEl.className = "lesson-nav";
+      navEl.innerHTML = `
+        ${prev ? `<a href="#${prev.id}">← ${prev.n}. ${prev.title}</a>` : "<span></span>"}
+        ${next ? `<a href="#${next.id}">${next.n}. ${next.title} →</a>` : "<span></span>"}
+      `;
+      article.appendChild(navEl);
+    }
+
+    content.appendChild(article);
+  });
 
   // ---------- READ TRACKING ----------
   function toggleRead(id, articleEl, btn) {
@@ -161,8 +161,7 @@
   }
   function updateNavRead(id) {
     const li = document.querySelector(`.nav-section li[data-id="${id}"]`);
-    if (!li) return;
-    li.classList.toggle("read", read.has(id));
+    if (li) li.classList.toggle("read", read.has(id));
   }
   function updateProgress() {
     const pct = totalLessons ? Math.round((read.size / totalLessons) * 100) : 0;
@@ -172,35 +171,68 @@
   }
   updateProgress();
 
-  // ---------- SCROLL HIGHLIGHT ----------
-  const lessonEls = [...document.querySelectorAll(".lesson")];
-  const navLis = [...document.querySelectorAll(".nav-section li")];
-  const obs = new IntersectionObserver((entries) => {
-    entries.forEach(e => {
-      if (e.isIntersecting) {
-        const id = e.target.id;
-        navLis.forEach(li => li.classList.toggle("active", li.dataset.id === id));
-        // open the section containing it
-        const li = document.querySelector(`.nav-section li[data-id="${id}"]`);
-        if (li) {
-          const det = li.closest("details");
-          if (det && !det.open) det.open = true;
-          li.scrollIntoView({ block: "nearest" });
-        }
-      }
+  // ---------- ROUTING ----------
+  const intro = document.getElementById("intro");
+
+  function currentLessonId() {
+    const m = location.hash.match(/^#(\d{2}-\d{2})$/);
+    return m ? m[1] : null;
+  }
+
+  function showLesson(id) {
+    // Toggle visibility
+    document.querySelectorAll(".lesson").forEach((l) => {
+      l.classList.toggle("is-active", l.id === id);
     });
-  }, { rootMargin: "-30% 0px -65% 0px" });
-  lessonEls.forEach(el => obs.observe(el));
+    intro.classList.toggle("is-active", !id);
+
+    // Highlight in sidebar
+    document.querySelectorAll(".nav-section li").forEach((li) => {
+      li.classList.toggle("active", li.dataset.id === id);
+    });
+    if (id) {
+      const navLi = document.querySelector(`.nav-section li[data-id="${id}"]`);
+      if (navLi) {
+        const det = navLi.closest("details");
+        if (det && !det.open) det.open = true;
+        // scrollIntoView trong sidebar (nearest để không thừa giật)
+        navLi.scrollIntoView({ block: "nearest" });
+      }
+    }
+
+    window.scrollTo({ top: 0, behavior: "instant" });
+
+    // Gắn nút "Chạy thử" cho block trong bài vừa hiển thị (nếu chưa quét)
+    if (window.AngularSnippetRunner) {
+      window.AngularSnippetRunner.injectButtons();
+    }
+  }
+
+  function route() {
+    showLesson(currentLessonId());
+  }
+
+  window.addEventListener("hashchange", route);
+  route();
+
+  // Brand link → về trang chủ
+  document.getElementById("brandHome").addEventListener("click", (e) => {
+    e.preventDefault();
+    if (location.hash) {
+      history.pushState("", document.title, location.pathname + location.search);
+      route();
+    }
+  });
 
   // ---------- SEARCH ----------
   const search = document.getElementById("search");
   search.addEventListener("input", () => {
     const q = search.value.trim().toLowerCase();
-    document.querySelectorAll(".nav-section").forEach(sec => {
+    document.querySelectorAll(".nav-section").forEach((sec) => {
       const det = sec.querySelector("details");
       const items = sec.querySelectorAll("li");
       let any = false;
-      items.forEach(li => {
+      items.forEach((li) => {
         const match = !q || li.textContent.toLowerCase().includes(q);
         li.style.display = match ? "" : "none";
         if (match) any = true;
@@ -218,26 +250,23 @@
       search.select();
     }
     if (e.key.toLowerCase() === "m" && document.activeElement !== search) {
-      // mark currently visible lesson read
-      const active = navLis.find(li => li.classList.contains("active"));
-      if (active) {
-        const id = active.dataset.id;
-        const art = document.getElementById(id);
-        const btn = art.querySelector(".mark-read");
-        toggleRead(id, art, btn);
-      }
+      const id = currentLessonId();
+      if (!id) return;
+      const art = document.getElementById(id);
+      const btn = art?.querySelector(".mark-read");
+      if (btn) toggleRead(id, art, btn);
+    }
+    // Mũi tên trái/phải để chuyển bài (chỉ khi đang xem bài)
+    if (document.activeElement === search) return;
+    const id = currentLessonId();
+    if (!id) return;
+    const idx = flatLessons.findIndex((l) => l.id === id);
+    if (e.key === "ArrowLeft" && idx > 0) {
+      location.hash = "#" + flatLessons[idx - 1].id;
+    } else if (e.key === "ArrowRight" && idx >= 0 && idx < flatLessons.length - 1) {
+      location.hash = "#" + flatLessons[idx + 1].id;
     }
   });
-
-  // hash scroll on load
-  if (location.hash) {
-    setTimeout(() => document.querySelector(location.hash)?.scrollIntoView(), 50);
-  }
-
-  // Gắn nút "Chạy thử" cho các block runnable sau khi nội dung đã render
-  if (window.AngularSnippetRunner) {
-    window.AngularSnippetRunner.injectButtons();
-  }
 })();
 </script>
 </body>

@@ -2,27 +2,23 @@
  * runner.js — gắn nút "Chạy thử trên StackBlitz" vào những block code
  * có dạng Angular component standalone với inline template.
  *
- * Phát hiện block runnable:
- *   - Có @Component({...})
- *   - Có template: `...` (inline, không phải templateUrl)
- *   - Có ít nhất một @Component có thuộc tính selector
- *   - Có export class
- *
- * Khi user click → tải StackBlitz SDK (lần đầu) → dựng project Angular 17
- * tối thiểu chứa snippet → mở tab mới.
+ * Khi user click → gom TOÀN BỘ block code liên quan trong cùng bài học
+ * (từ đầu bài đến block được click) → tách thành nhiều file (.ts/.html/.scss)
+ * → mở StackBlitz tab mới với project Angular 17 đầy đủ ngữ cảnh.
  */
 
 (function () {
   const SDK_URL = 'https://unpkg.com/@stackblitz/sdk@1/bundles/sdk.umd.js';
 
-  // ---------- Phát hiện ----------
+  // ==================== Phát hiện ====================
 
-  function isRunnable(code) {
+  function isRunnableBlock(code) {
     if (!/@Component\s*\(/.test(code)) return false;
-    if (!/template\s*:\s*`/.test(code)) return false;
     if (!/export\s+(?:abstract\s+)?class\s+\w+/.test(code)) return false;
-    // Phải có ít nhất một @Component có selector — nếu không thì là fragment minh hoạ.
+    // Phải có ít nhất một @Component có selector — tránh các fragment chỉ minh hoạ
     if (!/@Component\s*\(\s*\{[\s\S]*?selector\s*:\s*['"]/.test(code)) return false;
+    // Có inline template HOẶC có templateUrl (bài học có thể tách HTML ra block khác)
+    if (!/template\s*:\s*`/.test(code) && !/templateUrl\s*:/.test(code)) return false;
     return true;
   }
 
@@ -34,24 +30,116 @@
       const meta = m[1];
       const className = m[2];
       const sel = meta.match(/selector\s*:\s*['"]([^'"]+)['"]/);
-      const hasInlineTemplate = /template\s*:\s*`/.test(meta);
+      const tplUrl = meta.match(/templateUrl\s*:\s*['"]\.?\/?([\w./-]+)['"]/);
+      const stUrl = meta.match(/styleUrls?\s*:\s*\[?\s*['"]\.?\/?([\w./-]+)['"]/);
       out.push({
         className,
         selector: sel ? sel[1] : null,
-        hasInlineTemplate,
+        hasInlineTemplate: /template\s*:\s*`/.test(meta),
+        templateUrl: tplUrl ? tplUrl[1] : null,
+        styleUrl: stUrl ? stUrl[1] : null,
       });
     }
     return out;
   }
 
-  // ---------- Dựng project ----------
+  function parseExportedClasses(code) {
+    const out = [];
+    const re = /export\s+(?:abstract\s+)?class\s+(\w+)/g;
+    let m;
+    while ((m = re.exec(code))) out.push(m[1]);
+    return out;
+  }
+
+  // ==================== Phân loại block ====================
+
+  function classifyBlock(text) {
+    const t = text.trim();
+    if (!t) return 'empty';
+
+    // Shell command
+    if (/^(?:\s*[#$])?\s*(?:ng|npm|pnpm|yarn|node|cd|mkdir|cat|touch|rm|cp|mv|export|set|brew)\b/m.test(t.split('\n')[0])) {
+      return 'shell';
+    }
+    // File tree (├ └ ─ │)
+    if (/[├└─│]/.test(t)) return 'tree';
+
+    // TS code
+    if (
+      /@(?:Component|Directive|Pipe|Injectable|NgModule|Input|Output|HostListener|HostBinding|ViewChild|ContentChild)\b/.test(t) ||
+      /\bexport\s+(?:abstract\s+)?(?:class|interface|function|const|type|enum)\b/.test(t) ||
+      /\bimport\s+\{[^}]*\}\s+from\s+['"](?:@angular|rxjs)/.test(t) ||
+      /\b(?:bootstrapApplication|inject)\s*\(/.test(t)
+    ) {
+      return 'ts';
+    }
+
+    // JSON config
+    if (/^\s*\{[\s\S]*\}\s*$/.test(t) && /["']\w+["']\s*:/.test(t) && !/<\w+/.test(t)) {
+      return 'json';
+    }
+
+    // CSS/SCSS — selectors + braces
+    if (/^[\s\S]*\{[\s\S]*?:[\s\S]*?\}/.test(t) && /^\s*(?:\.[\w-]+|#[\w-]+|[\w-]+|:host)/.test(t.split('\n').find((l) => l.trim()) || '') && !/<\w+/.test(t)) {
+      return 'css';
+    }
+
+    // HTML — có thẻ
+    if (/<\w+[\s/>]/.test(t) || /^\s*&lt;/.test(t)) return 'html';
+
+    return 'other';
+  }
+
+  // ==================== Suy đoán tên file ====================
+
+  function camelToKebab(s) {
+    return s.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+  }
+
+  function inferTsFilename(code, components) {
+    // Ưu tiên comment kiểu "// foo.component.ts"
+    const m = code.match(/^\s*\/\/\s*([\w.-]+\.ts)\b/m);
+    if (m) return m[1];
+
+    // Suy từ component cuối cùng có selector
+    const target = [...components].reverse().find((c) => c.selector) || components[components.length - 1];
+    if (!target) return 'snippet.ts';
+
+    const c = target.className;
+    if (/Component$/.test(c)) return camelToKebab(c.replace(/Component$/, '')) + '.component.ts';
+    if (/Directive$/.test(c)) return camelToKebab(c.replace(/Directive$/, '')) + '.directive.ts';
+    if (/Pipe$/.test(c)) return camelToKebab(c.replace(/Pipe$/, '')) + '.pipe.ts';
+    if (/Service$/.test(c)) return camelToKebab(c.replace(/Service$/, '')) + '.service.ts';
+    return camelToKebab(c) + '.ts';
+  }
+
+  // ==================== Gom ngữ cảnh bài học ====================
+
+  function gatherLessonContext(clickedPre) {
+    const lesson = clickedPre.closest('.lesson');
+    if (!lesson) return null;
+
+    const allPres = [...lesson.querySelectorAll('pre')];
+    const clickedIdx = allPres.indexOf(clickedPre);
+    if (clickedIdx < 0) return null;
+
+    // Lấy block 0..clickedIdx
+    const blocks = [];
+    for (let i = 0; i <= clickedIdx; i++) {
+      const codeEl = allPres[i].querySelector('code');
+      const text = codeEl ? codeEl.textContent || '' : '';
+      blocks.push({ idx: i, kind: classifyBlock(text), text });
+    }
+
+    return { lesson, blocks, clickedIdx };
+  }
+
+  // ==================== Dựng project files ====================
 
   const PACKAGE_JSON = JSON.stringify({
     name: 'angular-snippet',
     version: '0.0.0',
-    scripts: {
-      start: 'ng serve --port 4200 --host 0.0.0.0',
-    },
+    scripts: { start: 'ng serve --port 4200 --host 0.0.0.0' },
     dependencies: {
       '@angular/animations': '^17.3.0',
       '@angular/common': '^17.3.0',
@@ -124,15 +212,12 @@
 
   const TSCONFIG_APP = JSON.stringify({
     extends: './tsconfig.json',
-    compilerOptions: {
-      outDir: './out-tsc/app',
-      types: [],
-    },
+    compilerOptions: { outDir: './out-tsc/app', types: [] },
     files: ['src/main.ts'],
     include: ['src/**/*.ts'],
   }, null, 2);
 
-  const STYLES_CSS = `body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; padding: 24px; line-height: 1.6; }
+  const STYLES_CSS = `body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; padding: 24px; line-height: 1.6; color: #1d1d1f; }
 h1, h2, h3 { letter-spacing: -0.01em; }
 button { font-family: inherit; }
 `;
@@ -152,57 +237,89 @@ button { font-family: inherit; }
 `;
   }
 
-  function buildFiles(snippetCode, title) {
-    const components = parseComponents(snippetCode);
-    if (components.length === 0) {
-      throw new Error('Không tìm thấy @Component nào trong snippet.');
+  function buildProject(context, title) {
+    const { blocks } = context;
+
+    // Lọc TS blocks
+    const tsItems = [];
+    for (const b of blocks) {
+      if (b.kind !== 'ts') continue;
+      const components = parseComponents(b.text);
+      const exportedClasses = parseExportedClasses(b.text);
+      tsItems.push({
+        idx: b.idx,
+        text: b.text,
+        components,
+        exportedClasses,
+      });
     }
 
-    const root = components.find((c) => c.selector === 'app-root' && c.hasInlineTemplate);
+    if (tsItems.length === 0) {
+      throw new Error('Không tìm thấy block TypeScript nào trong bài học.');
+    }
 
-    let mainTs;
-    let appComponentTs;
-    let snippetTs = null;
+    // Map className → idx của lần định nghĩa cuối cùng
+    const lastDefIdx = new Map();
+    tsItems.forEach((it, i) => {
+      it.exportedClasses.forEach((c) => lastDefIdx.set(c, i));
+    });
 
-    const banner = `// === Snippet trích từ "Tóm tắt Angular Core Deep Dive" ===
-// Lưu ý: nếu snippet là một đoạn minh hoạ, có thể bạn cần bổ sung
-//        @Input mặc định, import CommonModule/FormsModule, hoặc dữ liệu mẫu.
+    // Giữ TS blocks: có ít nhất 1 class là "định nghĩa cuối", HOẶC không export class nào (helper code)
+    const keptTs = tsItems.filter((it, i) => {
+      if (it.exportedClasses.length === 0) return true;
+      return it.exportedClasses.some((c) => lastDefIdx.get(c) === i);
+    });
+
+    // Gán filename cho mỗi TS block
+    const tsFiles = keptTs.map((it) => ({
+      ...it,
+      filename: inferTsFilename(it.text, it.components),
+    }));
+
+    // Đảm bảo unique filename — nếu trùng, suffix _2, _3…
+    const filenameCount = new Map();
+    tsFiles.forEach((f) => {
+      const base = f.filename;
+      const n = (filenameCount.get(base) || 0) + 1;
+      filenameCount.set(base, n);
+      if (n > 1) {
+        f.filename = base.replace(/\.ts$/, `_${n}.ts`);
+      }
+    });
+
+    // Tìm bootstrap component: AppComponent ưu tiên, kế đó selector 'app-root', kế đó component cuối có selector
+    const allComps = tsFiles.flatMap((f) => f.components.map((c) => ({ ...c, file: f.filename })));
+    let bootstrap = allComps.find((c) => c.className === 'AppComponent');
+    if (!bootstrap) bootstrap = allComps.find((c) => c.selector === 'app-root');
+    if (!bootstrap) bootstrap = [...allComps].reverse().find((c) => c.selector);
+
+    let mainTsContent;
+    let needsWrapper = false;
+
+    if (bootstrap && bootstrap.selector === 'app-root') {
+      // Bootstrap trực tiếp class này
+      const importPath = './app/' + bootstrap.file.replace(/\.ts$/, '');
+      mainTsContent = `import { bootstrapApplication } from '@angular/platform-browser';
+import { ${bootstrap.className} } from '${importPath}';
+
+bootstrapApplication(${bootstrap.className}).catch((err) => console.error(err));
 `;
-
-    if (root) {
-      // Snippet đã có app-root → dùng trực tiếp làm AppComponent
-      appComponentTs = banner + snippetCode;
-      mainTs = `import { bootstrapApplication } from '@angular/platform-browser';
-import { ${root.className} } from './app/app.component';
-
-bootstrapApplication(${root.className}).catch((err) => console.error(err));
-`;
-    } else {
-      // Wrap: tạo AppComponent mới, render selector của component cuối
-      const usable = components.filter((c) => c.hasInlineTemplate && c.selector);
-      const target = usable.length ? usable[usable.length - 1] : components[components.length - 1];
-      const importNames = components.map((c) => c.className).join(', ');
-      const sel = target.selector || 'app-snippet';
-
-      snippetTs = banner + snippetCode;
-
-      appComponentTs = `import { Component } from '@angular/core';
-import { ${importNames} } from './snippet';
-
-@Component({
-  selector: 'app-root',
-  standalone: true,
-  imports: [${importNames}],
-  template: \`<${sel}></${sel}>\`,
-})
-export class AppComponent {}
-`;
-      mainTs = `import { bootstrapApplication } from '@angular/platform-browser';
+    } else if (bootstrap) {
+      // Tạo wrapper AppComponent dùng selector của target
+      needsWrapper = true;
+      mainTsContent = `import { bootstrapApplication } from '@angular/platform-browser';
 import { AppComponent } from './app/app.component';
 
 bootstrapApplication(AppComponent).catch((err) => console.error(err));
 `;
+    } else {
+      throw new Error('Không tìm được component nào có selector để bootstrap.');
     }
+
+    // Tạo files
+    const banner = `// === Trích từ "Tóm tắt Angular Core Deep Dive" ===
+// Tự động gom các block code liên quan trong cùng bài học.
+`;
 
     const files = {
       'package.json': PACKAGE_JSON,
@@ -211,14 +328,86 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
       'tsconfig.app.json': TSCONFIG_APP,
       'src/index.html': indexHtml(title),
       'src/styles.css': STYLES_CSS,
-      'src/main.ts': mainTs,
-      'src/app/app.component.ts': appComponentTs,
+      'src/main.ts': mainTsContent,
     };
-    if (snippetTs) files['src/app/snippet.ts'] = snippetTs;
+
+    // Ghi mỗi TS file
+    tsFiles.forEach((f, i) => {
+      const content = i === 0 ? banner + f.text : f.text;
+      files['src/app/' + f.filename] = content;
+    });
+
+    // Ghép HTML/CSS cho các templateUrl/styleUrl
+    // Ưu tiên block có comment khớp với filename (vd "<!-- course-card.component.html -->")
+    // Fallback: HTML/CSS block đầu tiên xuất hiện sau TS. Nếu vẫn không có, tạo placeholder.
+    for (const f of tsFiles) {
+      for (const c of f.components) {
+        if (c.templateUrl) {
+          const path = 'src/app/' + cleanRelPath(c.templateUrl);
+          if (!files[path]) {
+            const block = findMatchingBlock(blocks, f.idx, 'html', cleanRelPath(c.templateUrl));
+            files[path] = block
+              ? block.text
+              : `<!-- Template ${cleanRelPath(c.templateUrl)} không có trong bài học. -->\n`;
+          }
+        }
+        if (c.styleUrl) {
+          const path = 'src/app/' + cleanRelPath(c.styleUrl);
+          if (!files[path]) {
+            const block = findMatchingBlock(blocks, f.idx, 'css', cleanRelPath(c.styleUrl));
+            files[path] = block
+              ? block.text
+              : `/* Style ${cleanRelPath(c.styleUrl)} không có trong bài học. */\n`;
+          }
+        }
+      }
+    }
+
+    // Tạo wrapper AppComponent nếu cần
+    if (needsWrapper) {
+      const importLines = [];
+      const importNames = [];
+      for (const f of tsFiles) {
+        const names = f.exportedClasses.filter((n) => f.components.some((c) => c.className === n));
+        if (names.length === 0) continue;
+        importLines.push(`import { ${names.join(', ')} } from './${f.filename.replace(/\.ts$/, '')}';`);
+        importNames.push(...names);
+      }
+      const targetSel = bootstrap.selector;
+      files['src/app/app.component.ts'] = `import { Component } from '@angular/core';
+${importLines.join('\n')}
+
+@Component({
+  selector: 'app-root',
+  standalone: true,
+  imports: [${importNames.join(', ')}],
+  template: \`<${targetSel}></${targetSel}>\`,
+})
+export class AppComponent {}
+`;
+    }
+
     return files;
   }
 
-  // ---------- StackBlitz SDK ----------
+  function findMatchingBlock(blocks, fromIdx, kind, expectedFilename) {
+    let firstSeen = null;
+    for (let j = fromIdx + 1; j < blocks.length; j++) {
+      if (blocks[j].kind !== kind) continue;
+      const firstLine = (blocks[j].text.split('\n')[0] || '').trim();
+      if (expectedFilename && firstLine.includes(expectedFilename)) {
+        return blocks[j];
+      }
+      if (!firstSeen) firstSeen = blocks[j];
+    }
+    return firstSeen;
+  }
+
+  function cleanRelPath(p) {
+    return p.replace(/^\.\//, '').replace(/^\.\.\//, '');
+  }
+
+  // ==================== StackBlitz SDK ====================
 
   let sdkPromise = null;
 
@@ -239,9 +428,14 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
     return sdkPromise;
   }
 
-  async function runSnippet(code, title) {
+  async function runFromContext(context, title) {
     const sdk = await loadSdk();
-    const files = buildFiles(code, title);
+    const files = buildProject(context, title);
+
+    // Open file ưu tiên là app.component.ts hoặc file có AppComponent, kế đến file đầu tiên
+    const preferOpen = ['src/app/app.component.ts', ...Object.keys(files).filter((k) => k.startsWith('src/app/') && k.endsWith('.ts'))];
+    const openFile = preferOpen.find((p) => files[p]) || 'src/main.ts';
+
     sdk.openProject(
       {
         title,
@@ -249,11 +443,11 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
         template: 'node',
         files,
       },
-      { newWindow: true, openFile: 'src/app/snippet.ts,src/app/app.component.ts' },
+      { newWindow: true, openFile },
     );
   }
 
-  // ---------- Inject UI ----------
+  // ==================== Inject UI ====================
 
   function injectButtons(scope) {
     const root = scope || document;
@@ -265,9 +459,9 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
       const codeEl = pre.querySelector('code');
       if (!codeEl) return;
       const text = codeEl.textContent || '';
-      if (!isRunnable(text)) return;
+      if (!isRunnableBlock(text)) return;
 
-      // Wrap pre vào .code-wrap để định vị nút tương đối với khối, không scroll cùng code
+      // Wrap pre vào .code-wrap
       let wrap = pre.parentElement;
       if (!wrap || !wrap.classList.contains('code-wrap')) {
         wrap = document.createElement('div');
@@ -279,7 +473,7 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
       const btn = document.createElement('button');
       btn.className = 'run-btn';
       btn.type = 'button';
-      btn.title = 'Mở snippet này trên StackBlitz (tab mới)';
+      btn.title = 'Mở snippet này trên StackBlitz (gom đủ ngữ cảnh trong bài, tab mới)';
       btn.innerHTML = '<span class="run-btn-icon">▶</span><span class="run-btn-label">Chạy thử</span>';
 
       btn.addEventListener('click', async (e) => {
@@ -292,7 +486,9 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
         btn.innerHTML = '<span class="run-btn-icon">⏳</span><span class="run-btn-label">Đang mở…</span>';
 
         try {
-          await runSnippet(text, lessonTitle);
+          const ctx = gatherLessonContext(pre);
+          if (!ctx) throw new Error('Không tìm thấy ngữ cảnh bài học.');
+          await runFromContext(ctx, lessonTitle);
         } catch (err) {
           console.error(err);
           btn.innerHTML = '<span class="run-btn-icon">⚠</span><span class="run-btn-label">Lỗi</span>';
@@ -313,7 +509,7 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
     });
   }
 
-  // ---------- Helpers ----------
+  // ==================== Helpers ====================
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
@@ -326,9 +522,8 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
   }
 
   // Public API
-  window.AngularSnippetRunner = { injectButtons, runSnippet };
+  window.AngularSnippetRunner = { injectButtons };
 
-  // Tự chạy lần đầu khi DOM sẵn sàng (index.html cũng có thể gọi lại sau khi render)
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => injectButtons());
   } else {
