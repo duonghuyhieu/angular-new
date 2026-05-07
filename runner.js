@@ -57,6 +57,24 @@
     return out;
   }
 
+  /**
+   * Block TS có phải là FILE hoàn chỉnh không, hay chỉ là method/fragment?
+   * Chỉ những block self-contained mới đáng đưa vào project StackBlitz.
+   *
+   * Hợp lệ:
+   *   - Có @Component/@Directive/@Pipe/@Injectable/@NgModule kèm class
+   *   - Có top-level `export class|interface|function|const|let|type|enum`
+   * Không hợp lệ (fragment):
+   *   - Chỉ method body (vd `uploadFile(file: File) { ... }`)
+   *   - Chỉ decorator field (vd `@Output() progress = ...`)
+   *   - Chỉ `import` mà không có gì sau
+   */
+  function isCompleteTsFile(code) {
+    if (/@(?:Component|Directive|Pipe|Injectable|NgModule)\s*\(/.test(code)) return true;
+    if (/^\s*export\s+(?:abstract\s+)?(?:class|interface|function|const|let|var|type|enum)\s/m.test(code)) return true;
+    return false;
+  }
+
   // ==================== Phân loại block ====================
 
   function classifyBlock(text) {
@@ -236,11 +254,102 @@
     return lines.join('\n') + '\n' + code;
   }
 
+  // ==================== Type shims ====================
+
+  const TS_BUILTIN_TYPES = new Set([
+    // Primitives
+    'string', 'number', 'boolean', 'bigint', 'symbol', 'object', 'never', 'unknown', 'void', 'any', 'undefined', 'null',
+    'String', 'Number', 'Boolean', 'BigInt', 'Symbol', 'Object', 'Function',
+    // Built-ins
+    'Array', 'Date', 'Error', 'TypeError', 'RangeError', 'RegExp', 'Map', 'Set', 'WeakMap', 'WeakSet',
+    'Promise', 'Iterator', 'IterableIterator', 'Iterable', 'Generator', 'AsyncGenerator', 'PromiseLike',
+    'JSON', 'Math', 'Reflect',
+    // Utility types
+    'Partial', 'Required', 'Readonly', 'Pick', 'Omit', 'Record', 'Exclude', 'Extract', 'NonNullable',
+    'ReturnType', 'Parameters', 'ConstructorParameters', 'InstanceType', 'ThisType', 'OmitThisParameter',
+    'ThisParameterType', 'Awaited', 'Uppercase', 'Lowercase', 'Capitalize', 'Uncapitalize',
+    'NoInfer', 'Mutable',
+    // Typed arrays
+    'ArrayBuffer', 'ArrayBufferLike', 'SharedArrayBuffer', 'DataView',
+    'Uint8Array', 'Uint8ClampedArray', 'Int8Array', 'Uint16Array', 'Int16Array', 'Uint32Array', 'Int32Array',
+    'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array',
+    // DOM core
+    'File', 'FileReader', 'FileList', 'Blob',
+    'Element', 'HTMLElement', 'HTMLInputElement', 'HTMLButtonElement', 'HTMLDivElement', 'HTMLFormElement',
+    'HTMLImageElement', 'HTMLAnchorElement', 'HTMLCanvasElement', 'HTMLAudioElement', 'HTMLVideoElement',
+    'HTMLTableElement', 'HTMLSelectElement', 'HTMLOptionElement', 'HTMLTextAreaElement', 'HTMLLabelElement',
+    'HTMLSpanElement', 'HTMLParagraphElement', 'HTMLHeadingElement', 'HTMLUListElement', 'HTMLLIElement',
+    'Document', 'Window', 'Node', 'NodeList', 'NamedNodeMap', 'Attr', 'Text', 'Comment',
+    'DocumentFragment', 'ShadowRoot',
+    // DOM events
+    'Event', 'MouseEvent', 'KeyboardEvent', 'TouchEvent', 'PointerEvent', 'InputEvent',
+    'FocusEvent', 'DragEvent', 'WheelEvent', 'AnimationEvent', 'TransitionEvent',
+    'CustomEvent', 'EventTarget', 'EventListener', 'EventListenerObject', 'EventInit',
+    'AddEventListenerOptions', 'EventListenerOptions',
+    // Network/browser APIs
+    'URL', 'URLSearchParams', 'FormData', 'Headers', 'Request', 'Response', 'AbortController', 'AbortSignal',
+    'WebSocket', 'XMLHttpRequest', 'XMLHttpRequestEventTarget',
+    'Storage', 'CookieStore', 'IDBDatabase', 'IDBObjectStore',
+    // Drawing/observers
+    'CanvasRenderingContext2D', 'WebGLRenderingContext', 'OffscreenCanvas',
+    'MutationObserver', 'IntersectionObserver', 'ResizeObserver', 'PerformanceObserver',
+    'CSSStyleDeclaration', 'DOMRect', 'DOMRectReadOnly', 'DOMTokenList', 'DOMException', 'DOMMatrix',
+    // Misc
+    'Console', 'Performance', 'PerformanceEntry', 'Navigator', 'Location', 'History',
+  ]);
+
+  function findReferencedTypes(code) {
+    const refs = new Set();
+    const patterns = [
+      /:\s*([A-Z]\w*)/g,
+      /<\s*([A-Z]\w*)/g,
+      /\bextends\s+([A-Z]\w*)/g,
+      /\bimplements\s+([A-Z]\w*)/g,
+      /\bas\s+([A-Z]\w*)/g,
+    ];
+    for (const pat of patterns) {
+      let m;
+      while ((m = pat.exec(code))) refs.add(m[1]);
+    }
+    return refs;
+  }
+
+  function collectDefinedSymbols(tsFiles) {
+    const names = new Set();
+    for (const f of tsFiles) {
+      [...f.text.matchAll(/(?:export\s+)?(?:abstract\s+)?(?:class|interface|type|enum)\s+(\w+)/g)]
+        .forEach((m) => names.add(m[1]));
+      [...f.text.matchAll(/import\s+\{([^}]+)\}\s+from\s+['"][^'"]+['"]/g)]
+        .forEach((m) => m[1].split(',').forEach((n) => {
+          const clean = n.replace(/\s/g, '').replace(/\sas\s.*/, '').split(' as ')[0];
+          if (clean) names.add(clean);
+        }));
+    }
+    Object.keys(ANGULAR_SYMBOL_MODULE).forEach((s) => names.add(s));
+    return names;
+  }
+
+  function generateTypeShims(tsFiles) {
+    const defined = collectDefinedSymbols(tsFiles);
+    const referenced = new Set();
+    for (const f of tsFiles) {
+      findReferencedTypes(f.text).forEach((n) => referenced.add(n));
+    }
+    const unresolved = [...referenced].filter((n) => !TS_BUILTIN_TYPES.has(n) && !defined.has(n));
+    if (unresolved.length === 0) return null;
+    return [
+      '// Auto-generated type shims — các type tham chiếu trong bài nhưng',
+      '// không được khai báo. Cho phép snippet compile; thay bằng type thật khi cần.',
+      ...unresolved.map((n) => `declare interface ${n} { [key: string]: any; }`),
+      '',
+    ].join('\n');
+  }
+
   // ==================== Resolution check ====================
 
   function checkResolution(blocks) {
     const tsItems = blocks
-      .filter((b) => b.kind === 'ts')
+      .filter((b) => b.kind === 'ts' && isCompleteTsFile(b.text))
       .map((b) => ({ ...b, components: parseComponents(b.text), exportedClasses: parseExportedClasses(b.text) }));
 
     const definedSelectors = new Set(tsItems.flatMap((it) => it.components.map((c) => c.selector).filter(Boolean)));
@@ -393,10 +502,12 @@ button { font-family: inherit; }
   function buildProject(context, title) {
     const { blocks } = context;
 
-    // Lọc TS blocks
+    // Lọc TS blocks — CHỈ những block là FILE hoàn chỉnh (có @Component hoặc export top-level).
+    // Fragment kiểu method body sẽ bị bỏ qua (không thể compile thành .ts riêng).
     const tsItems = [];
     for (const b of blocks) {
       if (b.kind !== 'ts') continue;
+      if (!isCompleteTsFile(b.text)) continue;
       const components = parseComponents(b.text);
       const exportedClasses = parseExportedClasses(b.text);
       tsItems.push({
@@ -491,6 +602,10 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
       files['src/app/' + f.filename] = content;
     });
 
+    // Sinh types.d.ts cho các type tham chiếu nhưng không khai báo (Course, User…)
+    const shims = generateTypeShims(tsFiles);
+    if (shims) files['src/types.d.ts'] = shims;
+
     // Ghép HTML/CSS cho các templateUrl/styleUrl
     // Ưu tiên block có comment khớp với filename (vd "<!-- course-card.component.html -->")
     // Fallback: HTML/CSS block đầu tiên xuất hiện sau TS. Nếu vẫn không có, tạo placeholder.
@@ -533,6 +648,15 @@ bootstrapApplication(AppComponent).catch((err) => console.error(err));
         importNames.push(...names);
       }
       const targetSel = bootstrap.selector;
+
+      // Smart wrapper: tự sinh demo data cho @Input bắt buộc của target component
+      // để runtime có dữ liệu, không bị throw {{ field.prop of undefined }}
+      const targetTsFile = tsFiles.find((f) => f.components.some((c) => c.className === bootstrap.className));
+      const demo = targetTsFile ? buildDemoBindings(bootstrap, targetTsFile, blocks) : { dataDecls: [], bindings: [] };
+
+      const bindingsAttr = demo.bindings.length ? ' ' + demo.bindings.join(' ') : '';
+      const classBody = demo.dataDecls.length ? '\n' + demo.dataDecls.join('\n') + '\n' : '';
+
       files['src/app/app.component.ts'] = `import { Component } from '@angular/core';
 ${importLines.join('\n')}
 
@@ -540,13 +664,68 @@ ${importLines.join('\n')}
   selector: 'app-root',
   standalone: true,
   imports: [${importNames.join(', ')}],
-  template: \`<${targetSel}></${targetSel}>\`,
+  template: \`<${targetSel}${bindingsAttr}></${targetSel}>\`,
 })
-export class AppComponent {}
+export class AppComponent {${classBody}}
 `;
     }
 
     return files;
+  }
+
+  /**
+   * Sinh `[input]="demo_input"` + class field tương ứng cho mỗi @Input
+   * BẮT BUỘC của target component (có dấu `!:`, không có default).
+   * Property của object demo được suy từ template (vd `{{ course.title }}`
+   * → `{ title: 'Demo title' }`).
+   */
+  function buildDemoBindings(target, targetTsFile, blocks) {
+    const classText = targetTsFile.text;
+    const inputs = [];
+    const re = /@Input\s*\(\s*[^)]*\)\s+(\w+)(!?)\s*(?::\s*([\w<>\[\]|.]+))?\s*(=\s*[^;\n]+)?/g;
+    let m;
+    while ((m = re.exec(classText))) {
+      inputs.push({
+        name: m[1],
+        required: m[2] === '!',
+        type: m[3] || 'any',
+        hasDefault: !!m[4],
+      });
+    }
+    if (inputs.length === 0) return { dataDecls: [], bindings: [] };
+
+    let template = target.templateInline || '';
+    if (!template && target.templateUrl) {
+      const block = findMatchingBlock(blocks, targetTsFile.idx, 'html', cleanRelPath(target.templateUrl));
+      if (block) template = block.text;
+    }
+
+    const dataDecls = [];
+    const bindings = [];
+
+    for (const input of inputs) {
+      // Skip nếu đã có default (chạy được mà không cần wrapper truyền)
+      if (input.hasDefault && !input.required) continue;
+
+      const propRefs = [...template.matchAll(new RegExp('\\b' + input.name + '\\s*\\.\\s*(\\w+)', 'g'))]
+        .map((mm) => mm[1]);
+      const uniqueProps = [...new Set(propRefs)];
+
+      let demoVal;
+      if (uniqueProps.length > 0) {
+        const props = uniqueProps.map((p) => `${p}: 'Demo ${p}'`).join(', ');
+        demoVal = `{ ${props} }`;
+      } else if (/string/i.test(input.type)) demoVal = `'Demo'`;
+      else if (/number/i.test(input.type)) demoVal = '0';
+      else if (/boolean/i.test(input.type)) demoVal = 'false';
+      else if (/\[\]$/.test(input.type) || /^Array</.test(input.type)) demoVal = '[]';
+      else demoVal = '{} as any';
+
+      dataDecls.push(`  demo_${input.name} = ${demoVal};`);
+      bindings.push(`[${input.name}]="demo_${input.name}"`);
+    }
+
+    return { dataDecls, bindings };
   }
 
   function findMatchingBlock(blocks, fromIdx, kind, expectedFilename) {
