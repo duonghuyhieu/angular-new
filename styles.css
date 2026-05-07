@@ -306,6 +306,54 @@ a:hover { text-decoration: underline; }
   margin: 12px 0 18px;
   box-shadow: var(--shadow);
 }
+
+/* Wrapper để định vị nút "Chạy thử" tuyệt đối, không trôi khi scroll ngang */
+.lesson .code-wrap {
+  position: relative;
+  margin: 12px 0 18px;
+}
+.lesson .code-wrap > pre {
+  margin: 0;
+}
+
+.run-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--code-ink);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  font-family: var(--sans);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity .15s, background .15s, border-color .15s, color .15s;
+  z-index: 2;
+}
+.lesson .code-wrap:hover .run-btn,
+.run-btn:focus-visible {
+  opacity: 1;
+}
+.run-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.run-btn:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+.run-btn-icon {
+  font-size: 9px;
+  line-height: 1;
+}
 .lesson pre code {
   background: transparent;
   padding: 0;

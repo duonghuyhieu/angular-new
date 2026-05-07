@@ -39,6 +39,7 @@
 </div>
 
 <script src="data.js"></script>
+<script src="runner.js"></script>
 <script>
 (function() {
   const KEY = "angular-course-read";
@@ -231,6 +232,11 @@
   // hash scroll on load
   if (location.hash) {
     setTimeout(() => document.querySelector(location.hash)?.scrollIntoView(), 50);
+  }
+
+  // Gắn nút "Chạy thử" cho các block runnable sau khi nội dung đã render
+  if (window.AngularSnippetRunner) {
+    window.AngularSnippetRunner.injectButtons();
   }
 })();
 </script>
